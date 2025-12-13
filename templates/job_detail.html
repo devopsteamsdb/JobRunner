@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}{{ job.name }} - Job Scheduler{% endblock %}
+
+{% block header %}
+<div class="header-with-actions">
+    <div>
+        <h2>{{ job.name }}</h2>
+        <p class="header-subtitle">
+            <span class="job-type-badge {{ job.job_type }}">{{ job.job_type }}</span>
+            <span class="status-badge {{ job.status }}">{{ job.status }}</span>
+        </p>
+    </div>
+    <div class="header-actions">
+        <button class="btn btn-primary" onclick="runJob({{ job.id }})">Run Now</button>
+        <a href="{{ url_for('views.job_form_edit', job_id=job.id) }}" class="btn btn-secondary">Edit</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="job-detail-grid">
+    <div class="info-panel">
+        <h3>Job Details</h3>
+        <div class="info-item"><label>Description</label>
+            <p>{{ job.description or 'No description' }}</p>
+        </div>
+        <div class="info-item"><label>Schedule</label>
+            <p><code>{{ job.cron_expression or 'Not set' }}</code></p>
+        </div>
+        <div class="info-item"><label>Last Run</label>
+            <p>{{ job.last_run.strftime('%Y-%m-%d %H:%M:%S') if job.last_run else 'Never' }}</p>
+        </div>
+        <div class="info-item"><label>Next Run</label>
+            <p>{{ job.next_run.strftime('%Y-%m-%d %H:%M:%S') if job.next_run else 'N/A' }}</p>
+        </div>
+    </div>
+
+    <div class="console-panel">
+        <div class="console-header">
+            <h3>Live Console</h3>
+            <span class="connection-status" id="connection-status">Connecting...</span>
+        </div>
+        <div class="console-output" id="console-output">
+            <div class="console-placeholder">Waiting for job output...</div>
+        </div>
+    </div>
+</div>
+
+<section class="history-section">
+    <h3>Execution History</h3>
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Exit Code</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><span class="status-badge {{ log.status }}">{{ log.status }}</span></td>
+                    <td>{{ log.exit_code if log.exit_code is not none else '-' }}</td>
+                    <td><button class="btn btn-sm" onclick="viewLog({{ log.id }})">View</button></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4">No history yet</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<div class="modal" id="log-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Log Output</h3><button onclick="closeModal()">&times;</button>
+        </div>
+        <pre id="log-output" class="log-viewer"></pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const jobId = {{ job.id }};
+    const socket = io('/jobs');
+
+    socket.on('connect', () => {
+        document.getElementById('connection-status').textContent = 'Connected';
+        socket.emit('subscribe', { job_id: jobId });
+    });
+
+    socket.on('job_log', (data) => {
+        if (data.job_id === jobId) {
+            const console = document.getElementById('console-output');
+            const ph = console.querySelector('.console-placeholder');
+            if (ph) ph.remove();
+            const line = document.createElement('div');
+            line.className = 'console-line';
+            line.textContent = data.message;
+            console.appendChild(line);
+            console.scrollTop = console.scrollHeight;
+
+            // Refresh history/status on state changes
+            if (data.message.startsWith('[QUEUED]') || data.message.startsWith('[START]')) {
+                updateJobStatus();
+                updateJobHistory();
+            }
+        }
+    });
+
+    socket.on('job_complete', (data) => {
+        if (data.job_id === jobId) {
+            // Add separator to console
+            const consoleOutput = document.getElementById('console-output');
+            const separator = document.createElement('div');
+            separator.className = 'console-separator';
+            separator.style.borderTop = '1px dashed #666';
+            separator.style.margin = '10px 0';
+            separator.style.padding = '5px 0';
+            separator.textContent = `--- Execution finished at ${data.timestamp} ---`;
+            consoleOutput.appendChild(separator);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+
+            setTimeout(() => {
+                updateJobStatus();
+                updateJobHistory();
+            }, 1000); // Keep delay for completion to ensure DB commit
+        }
+    });
+
+    async function updateJobStatus() {
+        try {
+            const res = await fetch(`/api/jobs/${jobId}`);
+            if (res.ok) {
+                const job = await res.json();
+
+                // Update header status
+                const statusBadge = document.querySelector('.header-subtitle .status-badge');
+                if (statusBadge) {
+                    statusBadge.className = `status-badge ${job.status}`;
+                    statusBadge.textContent = job.status;
+                }
+
+                // Update info panel
+                const infoItems = document.querySelectorAll('.info-panel .info-item p');
+                // Assuming order: Description, Schedule, Last Run, Next Run
+                if (infoItems[2]) infoItems[2].textContent = job.last_run || 'Never';
+                if (infoItems[3]) infoItems[3].textContent = job.next_run || 'N/A';
+            }
+        } catch (e) {
+            console.error('Failed to update status:', e);
+        }
+    }
+
+    async function updateJobHistory() {
+        try {
+            const res = await fetch(`/api/jobs/${jobId}/logs?per_page=10`);
+            if (res.ok) {
+                const data = await res.json();
+                const tbody = document.querySelector('.data-table tbody');
+                if (tbody && data.logs.length > 0) {
+                    tbody.innerHTML = data.logs.map(log => `
+                        <tr>
+                            <td>${log.started_at}</td>
+                            <td><span class="status-badge ${log.status}">${log.status}</span></td>
+                            <td>${log.exit_code != null ? log.exit_code : '-'}</td>
+                            <td><button class="btn btn-sm" onclick="viewLog(${log.id})">View</button></td>
+                        </tr>
+                    `).join('');
+                }
+            }
+        } catch (e) {
+            console.error('Failed to update history:', e);
+        }
+    }
+
+    async function runJob(id) {
+        const res = await fetch(`/api/jobs/${id}/run`, { method: 'POST' });
+        if (res.ok) {
+            showToast('Job triggered', 'success');
+            // Immediate refresh to show queued status
+            updateJobHistory();
+            updateJobStatus();
+        }
+    }
+
+    async function viewLog(logId) {
+        const res = await fetch(`/api/logs/${logId}`);
+        const data = await res.json();
+        document.getElementById('log-output').textContent = data.output || 'No output';
+        document.getElementById('log-modal').classList.add('active');
+    }
+
+    function closeModal() {
+        document.getElementById('log-modal').classList.remove('active');
+    }
+</script>
+{% endblock %}

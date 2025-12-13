@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Jobs - Job Scheduler{% endblock %}
+
+{% block header %}
+<div class="header-with-actions">
+    <div>
+        <h2>Scheduled Jobs</h2>
+        <p class="header-subtitle">Manage your automation tasks</p>
+    </div>
+    <a href="{{ url_for('views.job_form_new') }}" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        New Job
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Filter Bar -->
+<div class="filter-bar">
+    <div class="filter-group">
+        <label>Type:</label>
+        <select id="filter-type" onchange="applyFilters()">
+            <option value="">All Types</option>
+            <option value="python">Python</option>
+            <option value="bash">Bash</option>
+            <option value="powershell">PowerShell</option>
+            <option value="ssh">SSH</option>
+            <option value="winrm">WinRM</option>
+            <option value="ansible">Ansible</option>
+            <option value="api">API</option>
+        </select>
+    </div>
+    <div class="filter-group">
+        <label>Status:</label>
+        <select id="filter-status" onchange="applyFilters()">
+            <option value="">All Status</option>
+            <option value="idle">Idle</option>
+            <option value="running">Running</option>
+            <option value="success">Success</option>
+            <option value="failed">Failed</option>
+        </select>
+    </div>
+</div>
+
+<!-- Jobs Table -->
+<div class="table-container">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Schedule</th>
+                <th>Status</th>
+                <th>Last Run</th>
+                <th>Next Run</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if jobs %}
+            {% for job in jobs %}
+            <tr class="job-row" data-type="{{ job.job_type }}" data-status="{{ job.status }}">
+                <td>
+                    <div class="job-name-cell">
+                        <a href="{{ url_for('views.job_detail', job_id=job.id) }}">{{ job.name }}</a>
+                        <span class="job-enabled-indicator {{ 'enabled' if job.enabled else 'disabled' }}"
+                            title="{{ 'Enabled' if job.enabled else 'Disabled' }}"></span>
+                    </div>
+                </td>
+                <td>
+                    <span class="job-type-badge {{ job.job_type }}">{{ job.job_type }}</span>
+                </td>
+                <td>
+                    {% if job.schedule_type == 'cron' %}
+                    <code>{{ job.cron_expression or 'Not set' }}</code>
+                    {% elif job.schedule_type == 'interval' %}
+                    Every {{ job.interval_seconds }}s
+                    {% elif job.schedule_type == 'once' %}
+                    {{ job.run_at.strftime('%Y-%m-%d %H:%M') if job.run_at else 'Not set' }}
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                        <span class="status-badge {{ job.status }}">
+                            {% if job.status == 'running' %}
+                            <span class="spinner small"></span>
+                            {% endif %}
+                            {{ job.status }}
+                        </span>
+                        {% if job.has_queue %}
+                        <span class="status-badge queued">queued</span>
+                        {% endif %}
+                    </div>
+                </td>
+                <td>{{ job.last_run.strftime('%Y-%m-%d %H:%M') if job.last_run else 'Never' }}</td>
+                <td>{{ job.next_run.strftime('%Y-%m-%d %H:%M') if job.next_run else 'N/A' }}</td>
+                <td>
+                    <div class="action-buttons">
+                        <button class="btn btn-icon btn-run" onclick="runJob({{ job.id }})" title="Run Now">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <polygon points="5,3 19,12 5,21 5,3" />
+                            </svg>
+                        </button>
+                        <button class="btn btn-icon btn-toggle" onclick="toggleJob({{ job.id }})"
+                            title="{{ 'Disable' if job.enabled else 'Enable' }}">
+                            {% if job.enabled %}
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="6" y="4" width="4" height="16" />
+                                <rect x="14" y="4" width="4" height="16" />
+                            </svg>
+                            {% else %}
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <polygon points="5,3 19,12 5,21 5,3" />
+                            </svg>
+                            {% endif %}
+                        </button>
+                        <a href="{{ url_for('views.job_form_edit', job_id=job.id) }}" class="btn btn-icon" title="Edit">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                        </a>
+                        <button class="btn btn-icon" onclick="duplicateJob({{ job.id }})" title="Duplicate">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                        <button class="btn btn-icon btn-danger" onclick="deleteJob({{ job.id }}, '{{ job.name }}')"
+                            title="Delete">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <polyline points="3,6 5,6 21,6" />
+                                <path
+                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+            {% else %}
+            <tr>
+                <td colspan="7" class="empty-cell">
+                    <div class="empty-state">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1">
+                            <path
+                                d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 1 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                        </svg>
+                        <p>No jobs created yet</p>
+                        <a href="{{ url_for('views.job_form_new') }}" class="btn btn-primary">Create your first job</a>
+                    </div>
+                </td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Toast notification -->
+<div class="toast-container" id="toast-container"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function applyFilters() {
+        const typeFilter = document.getElementById('filter-type').value;
+        const statusFilter = document.getElementById('filter-status').value;
+
+        document.querySelectorAll('.job-row').forEach(row => {
+            const type = row.dataset.type;
+            const status = row.dataset.status;
+
+            let show = true;
+            if (typeFilter && type !== typeFilter) show = false;
+            if (statusFilter && status !== statusFilter) show = false;
+
+            row.style.display = show ? '' : 'none';
+        });
+    }
+
+    async function runJob(jobId) {
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/run`, { method: 'POST' });
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('Job triggered successfully', 'success');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(data.error || 'Failed to run job', 'error');
+            }
+        } catch (error) {
+            showToast('Error: ' + error.message, 'error');
+        }
+    }
+
+    async function toggleJob(jobId) {
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/toggle`, { method: 'POST' });
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast(data.message, 'success');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.error || 'Failed to toggle job', 'error');
+            }
+        } catch (error) {
+            showToast('Error: ' + error.message, 'error');
+        }
+    }
+
+    async function duplicateJob(jobId) {
+        if (!confirm('Duplicate this job?')) return;
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}/duplicate`, { method: 'POST' });
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('Job duplicated successfully', 'success');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.error || 'Failed to duplicate job', 'error');
+            }
+        } catch (error) {
+            showToast('Error: ' + error.message, 'error');
+        }
+    }
+
+    async function deleteJob(jobId, jobName) {
+        if (!confirm(`Are you sure you want to delete "${jobName}"?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast('Job deleted successfully', 'success');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                showToast(data.error || 'Failed to delete job', 'error');
+            }
+        } catch (error) {
+            showToast('Error: ' + error.message, 'error');
+        }
+    }
+</script>
+{% endblock %}

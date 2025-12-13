@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Edit' if job else 'New' }} Job - Job Scheduler{% endblock %}
+
+{% block header %}
+<div class="header-with-actions">
+    <div>
+        <h2>{{ 'Edit Job' if job else 'Create New Job' }}</h2>
+        <p class="header-subtitle">{{ 'Modify job configuration' if job else 'Set up a new automation task' }}</p>
+    </div>
+    <a href="{{ url_for('views.jobs_list') }}" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12,19 5,12 12,5" />
+        </svg>
+        Back to Jobs
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<form id="job-form" class="job-form">
+    <!-- Basic Info Section -->
+    <section class="form-section">
+        <h3>Basic Information</h3>
+
+        <div class="form-group">
+            <label for="name">Job Name *</label>
+            <input type="text" id="name" name="name" required value="{{ job.name if job else '' }}"
+                placeholder="Enter job name">
+        </div>
+
+        <div class="form-group">
+            <label for="description">Description</label>
+            <textarea id="description" name="description" rows="2"
+                placeholder="Describe what this job does">{{ job.description if job else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="job_type">Job Type *</label>
+            <select id="job_type" name="job_type" required onchange="updateFormFields()">
+                <option value="">Select type...</option>
+                <option value="python" {{ 'selected' if job and job.job_type=='python' }}>Python Script</option>
+                <option value="bash" {{ 'selected' if job and job.job_type=='bash' }}>Bash Script</option>
+                <option value="powershell" {{ 'selected' if job and job.job_type=='powershell' }}>PowerShell Script
+                </option>
+                <option value="ssh" {{ 'selected' if job and job.job_type=='ssh' }}>SSH Command</option>
+                <option value="winrm" {{ 'selected' if job and job.job_type=='winrm' }}>WinRM Command</option>
+                <option value="ansible" {{ 'selected' if job and job.job_type=='ansible' }}>Ansible Playbook</option>
+                <option value="api" {{ 'selected' if job and job.job_type=='api' }}>REST API Call</option>
+            </select>
+        </div>
+    </section>
+
+    <!-- Script/Command Section -->
+    <section class="form-section" id="section-script">
+        <h3>Script / Command</h3>
+
+        <div class="form-group">
+            <label>Source Type</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="source_type" value="inline" {{ 'checked' if not job or
+                        job.source_type=='inline' }} onchange="updateFormFields()">
+                    <span>Inline Script</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="source_type" value="file" {{ 'checked' if job and job.source_type=='file'
+                        }} onchange="updateFormFields()">
+                    <span>File from Server</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-group" id="group-script-path" style="display:none;">
+            <label for="script_path">Script File Path</label>
+            <div class="input-with-button">
+                <input type="text" id="script_path" name="script_path" value="{{ job.script_path if job else '' }}"
+                    placeholder="scripts/myscript.ps1">
+                <button type="button" class="btn btn-secondary" onclick="openFilePicker()">Browse...</button>
+            </div>
+            <div class="form-help">Relative to project root (e.g. <code>scripts/</code>)</div>
+        </div>
+
+        <div class="form-group" id="group-script-content">
+            <label for="script_content">Script Content</label>
+            <textarea id="script_content" name="script_content" rows="10" class="code-editor"
+                placeholder="Enter your script here...">{{ job.script_content if job else '' }}</textarea>
+        </div>
+
+        <div class="form-group" id="group-command" style="display:none;">
+            <label for="command">Command</label>
+            <input type="text" id="command" name="command" value="{{ job.command if job else '' }}"
+                placeholder="Enter command to execute">
+        </div>
+    </section>
+
+    <!-- Remote Execution Section -->
+    <section class="form-section" id="section-remote" style="display:none;">
+        <h3>Remote Host</h3>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="host">Hostname / IP *</label>
+                <input type="text" id="host" name="host" value="{{ job.host if job else '' }}"
+                    placeholder="192.168.1.100 or hostname">
+            </div>
+
+            <div class="form-group">
+                <label for="port">Port</label>
+                <input type="number" id="port" name="port" value="{{ job.port if job else '' }}"
+                    placeholder="22 for SSH, 5985 for WinRM">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="credential_id">Credential</label>
+            <select id="credential_id" name="credential_id">
+                <option value="">Select credential...</option>
+                {% for cred in credentials %}
+                <option value="{{ cred.id }}" {{ 'selected' if job and job.credential_id==cred.id }}>
+                    {{ cred.name }} ({{ cred.credential_type }})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+    </section>
+
+    <!-- API Section -->
+    <section class="form-section" id="section-api" style="display:none;">
+        <h3>API Configuration</h3>
+
+        <div class="form-row">
+            <div class="form-group" style="flex: 0 0 120px;">
+                <label for="api_method">Method</label>
+                <select id="api_method" name="api_method">
+                    <option value="GET" {{ 'selected' if job and job.api_method=='GET' }}>GET</option>
+                    <option value="POST" {{ 'selected' if job and job.api_method=='POST' }}>POST</option>
+                    <option value="PUT" {{ 'selected' if job and job.api_method=='PUT' }}>PUT</option>
+                    <option value="DELETE" {{ 'selected' if job and job.api_method=='DELETE' }}>DELETE</option>
+                    <option value="PATCH" {{ 'selected' if job and job.api_method=='PATCH' }}>PATCH</option>
+                </select>
+            </div>
+
+            <div class="form-group" style="flex: 1;">
+                <label for="api_url">URL *</label>
+                <input type="text" id="api_url" name="api_url" value="{{ job.api_url or '' if job else '' }}"
+                    placeholder="https://api.example.com/endpoint">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="api_headers">Headers (JSON)</label>
+            <textarea id="api_headers" name="api_headers" rows="3" class="code-editor"
+                placeholder='{"Content-Type": "application/json"}'>{{ job.api_headers or '' if job else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="api_body">Request Body</label>
+            <textarea id="api_body" name="api_body" rows="5" class="code-editor"
+                placeholder="Request body (JSON or plain text)">{{ job.api_body or '' if job else '' }}</textarea>
+        </div>
+    </section>
+
+    <!-- Ansible Section -->
+    <section class="form-section" id="section-ansible" style="display:none;">
+        <h3>Ansible Configuration</h3>
+
+        <div class="form-group">
+            <label for="ansible_playbook">Playbook (YAML) *</label>
+            <textarea id="ansible_playbook" name="ansible_playbook" rows="10" class="code-editor" placeholder="---
+- hosts: all
+  tasks:
+    - name: Example task
+      debug:
+        msg: Hello World">{{ job.ansible_playbook if job else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Inventory Source Type</label>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="inventory_source_type" value="inline" {{ 'checked' if not job or
+                        (job.inventory_source_type !='file' ) }} onchange="updateFormFields()">
+                    <span>Inline Inventory</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="inventory_source_type" value="file" {{ 'checked' if job and
+                        job.inventory_source_type=='file' }} onchange="updateFormFields()">
+                    <span>File from Server</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="ansible_inventory">Inventory (INI format or File Path)</label>
+            <div class="input-with-button">
+                <textarea id="ansible_inventory" name="ansible_inventory" rows="4" class="code-editor" placeholder="[servers]
+192.168.1.100 ansible_user=admin">{{ job.ansible_inventory if job else '' }}</textarea>
+                <button type="button" id="btn-browse-inventory" class="btn btn-secondary" style="display:none;"
+                    onclick="openFilePicker('ansible_inventory')">Browse...</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="ansible_extra_vars">Extra Variables (JSON)</label>
+            <textarea id="ansible_extra_vars" name="ansible_extra_vars" rows="3" class="code-editor"
+                placeholder='{"var1": "value1"}'>{{ job.ansible_extra_vars if job else '' }}</textarea>
+        </div>
+    </section>
+
+    <!-- Schedule Section -->
+    <section class="form-section">
+        <h3>Schedule</h3>
+
+        <div class="form-group">
+            <label for="schedule_type">Schedule Type</label>
+            <select id="schedule_type" name="schedule_type" onchange="updateScheduleFields()">
+                <option value="cron" {{ 'selected' if not job or job.schedule_type=='cron' }}>Cron Expression</option>
+                <option value="interval" {{ 'selected' if job and job.schedule_type=='interval' }}>Interval</option>
+                <option value="once" {{ 'selected' if job and job.schedule_type=='once' }}>Run Once</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="group-cron">
+            <label for="cron_expression">Cron Expression</label>
+            <input type="text" id="cron_expression" name="cron_expression"
+                value="{{ job.cron_expression if job else '' }}" placeholder="* * * * * (min hour day month weekday)">
+            <div class="form-help">
+                Examples: <code>0 * * * *</code> (hourly), <code>0 0 * * *</code> (daily), <code>*/5 * * * *</code>
+                (every 5 min)
+            </div>
+        </div>
+
+        <div class="form-group" id="group-interval" style="display:none;">
+            <label for="interval_seconds">Interval (seconds)</label>
+            <input type="number" id="interval_seconds" name="interval_seconds"
+                value="{{ job.interval_seconds if job else '' }}" placeholder="3600" min="1">
+        </div>
+
+        <div class="form-group" id="group-run-at" style="display:none;">
+            <label for="run_at">Run At</label>
+            <input type="datetime-local" id="run_at" name="run_at"
+                value="{{ job.run_at.strftime('%Y-%m-%dT%H:%M') if job and job.run_at else '' }}">
+        </div>
+
+        <div class="form-group">
+            <label class="checkbox-label">
+                <input type="checkbox" id="enabled" name="enabled" {{ 'checked' if not job or job.enabled }}>
+                <span>Enable this job</span>
+            </label>
+        </div>
+    </section>
+
+    <!-- Form Actions -->
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary btn-lg">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                <polyline points="17,21 17,13 7,13 7,21" />
+                <polyline points="7,3 7,8 15,8" />
+            </svg>
+            {{ 'Save Changes' if job else 'Create Job' }}
+        </button>
+        <a href="{{ url_for('views.jobs_list') }}" class="btn btn-secondary btn-lg">Cancel</a>
+    </div>
+</form>
+
+<div class="toast-container" id="toast-container"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const jobId = {{ job.id if job else 'null' }};
+
+    function updateFormFields() {
+        const jobType = document.getElementById('job_type').value;
+        const sourceType = document.querySelector('input[name="source_type"]:checked').value;
+
+        // Hide all optional sections first
+        document.getElementById('section-remote').style.display = 'none';
+        document.getElementById('section-api').style.display = 'none';
+        document.getElementById('section-ansible').style.display = 'none';
+        document.getElementById('group-script-content').style.display = 'none';
+        document.getElementById('group-script-path').style.display = 'none';
+        document.getElementById('group-command').style.display = 'none';
+
+        // Show relevant sections
+        if (['ssh', 'winrm'].includes(jobType)) {
+            document.getElementById('section-remote').style.display = 'block';
+            document.getElementById('group-command').style.display = 'block';
+        } else if (jobType === 'ansible') {
+            document.getElementById('section-remote').style.display = 'block';
+            document.getElementById('section-ansible').style.display = 'block';
+            document.getElementById('section-ansible').style.display = 'block';
+
+            // Ansible can also use file source for playbooks
+            if (sourceType === 'file') {
+                document.getElementById('group-script-path').style.display = 'block';
+                document.querySelector('label[for="script_path"]').textContent = 'Playbook Path';
+                document.querySelector('label[for="ansible_playbook"]').parentElement.style.display = 'none';
+            } else {
+                document.querySelector('label[for="ansible_playbook"]').parentElement.style.display = 'block';
+            }
+
+            // Handle Inventory Source Type
+            const inventorySourceType = document.querySelector('input[name="inventory_source_type"]:checked').value;
+            const inventoryLabel = document.querySelector('label[for="ansible_inventory"]');
+
+            if (inventorySourceType === 'file') {
+                inventoryLabel.textContent = 'Inventory File Path (relative to scripts/)';
+                document.getElementById('ansible_inventory').setAttribute('rows', '1');
+                document.getElementById('ansible_inventory').setAttribute('placeholder', 'inventory.ini');
+                document.getElementById('btn-browse-inventory').style.display = 'block';
+                // Change textarea to text input look if desired, or keep as is
+            } else {
+                inventoryLabel.textContent = 'Inventory Content (INI format)';
+                document.getElementById('ansible_inventory').setAttribute('rows', '4');
+                document.getElementById('ansible_inventory').setAttribute('placeholder', '[servers]\n192.168.1.100');
+                document.getElementById('btn-browse-inventory').style.display = 'none';
+            }
+        } else if (jobType === 'api') {
+            document.getElementById('section-api').style.display = 'block';
+        } else {
+            // Script types (python, bash, powershell)
+            if (sourceType === 'file') {
+                document.getElementById('group-script-path').style.display = 'block';
+                document.querySelector('label[for="script_path"]').textContent = 'Script File Path';
+            } else {
+                document.getElementById('group-script-content').style.display = 'block';
+            }
+        }
+    }
+
+    let currentTargetInputId = 'script_path';
+
+    function openFilePicker(targetInputId = 'script_path') {
+        currentTargetInputId = targetInputId;
+
+        // Simple prompt for now, or open File Manager in new tab
+        // Ideally this would be a modal
+        const width = 800;
+        const height = 600;
+        const left = (screen.width - width) / 2;
+        const top = (screen.height - height) / 2;
+
+        const popup = window.open('/files?mode=picker', 'FileManager',
+            `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`);
+    }
+
+    // Listen for file selection
+    window.addEventListener('message', function (event) {
+        if (event.data.type === 'fileSelected') {
+            const targetInput = document.getElementById(currentTargetInputId);
+            if (targetInput) {
+                targetInput.value = event.data.path;
+            }
+        }
+    });
+
+    function updateScheduleFields() {
+        const scheduleType = document.getElementById('schedule_type').value;
+
+        document.getElementById('group-cron').style.display = scheduleType === 'cron' ? 'block' : 'none';
+        document.getElementById('group-interval').style.display = scheduleType === 'interval' ? 'block' : 'none';
+        document.getElementById('group-run-at').style.display = scheduleType === 'once' ? 'block' : 'none';
+    }
+
+    async function submitForm(e) {
+        if (e) e.preventDefault();
+
+        console.log('submitForm called, jobId:', jobId);
+
+        const form = document.getElementById('job-form');
+        const formData = new FormData(form);
+        const data = {};
+
+        // Get source_type manually as checkboxes/radios behavior varies
+        data['source_type'] = document.querySelector('input[name="source_type"]:checked').value;
+
+        // Get inventory_source_type if ansible
+        if (document.getElementById('job_type').value === 'ansible') {
+            const invSource = document.querySelector('input[name="inventory_source_type"]:checked');
+            if (invSource) {
+                data['inventory_source_type'] = invSource.value;
+            }
+        }
+
+        formData.forEach((value, key) => {
+            if (key === 'enabled') {
+                data[key] = true;
+            } else if (key === 'port' || key === 'interval_seconds' || key === 'credential_id') {
+                data[key] = value ? parseInt(value) : null;
+            } else {
+                data[key] = value || null;
+            }
+        });
+
+        // Handle checkbox
+        if (!formData.has('enabled')) {
+            data['enabled'] = false;
+        }
+
+        console.log('Sending data:', JSON.stringify(data, null, 2));
+
+        const url = jobId ? `/api/jobs/${jobId}` : '/api/jobs';
+        const method = jobId ? 'PUT' : 'POST';
+
+        console.log('URL:', url, 'Method:', method);
+
+        try {
+            const response = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+
+            console.log('Response status:', response.status);
+            const result = await response.json();
+            console.log('Response data:', result);
+
+            if (response.ok) {
+                // alert('Job saved successfully!');
+                window.location.href = '/jobs/' + result.id;
+            } else {
+                const errorMsg = result.error || 'Failed to save job';
+                console.error('Save error:', errorMsg);
+                alert('Error: ' + errorMsg);
+            }
+        } catch (error) {
+            console.error('Fetch error:', error);
+            alert('Error: ' + error.message);
+        }
+
+        return false;
+    }
+
+    // Initialize on DOM ready
+    document.addEventListener('DOMContentLoaded', function () {
+        console.log('DOM loaded, jobId:', jobId);
+
+        // Initialize form fields
+        updateFormFields();
+        updateScheduleFields();
+
+        // Attach form submit handler
+        const form = document.getElementById('job-form');
+        if (form) {
+            form.addEventListener('submit', submitForm);
+            console.log('Form submit handler attached');
+        }
+    });
+
+    // Also initialize immediately in case DOM is already loaded
+    if (document.readyState !== 'loading') {
+        updateFormFields();
+        updateScheduleFields();
+    }
+</script>
+{% endblock %}

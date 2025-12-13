@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: jobrunner_app
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+      - ./scripts:/app/scripts
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_DEBUG=1
+      # Force Ansible settings at runtime (overrides image settings)
+      - ANSIBLE_DEPRECATION_WARNINGS=False
+      - ANSIBLE_CONFIG=/etc/ansible/ansible.cfg
