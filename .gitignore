@@ -31,3 +31,6 @@ htmlcov/
 
 # Temporary
 fix_db.py
+
+# User content
+scripts/
