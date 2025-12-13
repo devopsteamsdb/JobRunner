@@ -14,7 +14,7 @@ from routes import jobs_bp, logs_bp, credentials_bp, views_bp, files_bp
 socketio = SocketIO()
 
 
-def create_app(config_name=None):
+def create_app(config_name=None, cleanup_scheduler=True):
     """Application factory."""
     if config_name is None:
         config_name = os.environ.get('FLASK_ENV', 'development')
@@ -53,7 +53,7 @@ def create_app(config_name=None):
                     pass
     
     # Initialize scheduler
-    scheduler_service.init_app(app, socketio)
+    scheduler_service.init_app(app, socketio, cleanup=cleanup_scheduler)
     
     # Register SocketIO namespace
     register_socketio_events(socketio)
@@ -91,9 +91,11 @@ def register_socketio_events(socketio):
             print(f'Client unsubscribed from job {job_id}')
 
 
-# Create default app instance
-app = create_app()
-
+# Create default app instance ONLY if run directly or by WSGI (not when imported for tests)
+# But Flask/Gunicorn expects 'app' to be importable if using module:app pattern.
+# However, Dockerfile uses 'python app.py' so it uses __main__.
+# If we need it for 'flask run', we can leave it but we MUST disable cleanup.
 
 if __name__ == '__main__':
+    app = create_app()
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)

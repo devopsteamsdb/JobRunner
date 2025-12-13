@@ -174,16 +174,210 @@
 
     socket.on('connect', function () {
         console.log('Connected to job updates');
+        // Refresh data on connection/reconnection to ensure sync
+        updateRecentActivity();
+        updateStats();
+        // Clear running jobs list and let it rebuild if needed, or fetch running API
+        fetch('/api/jobs/running')
+            .then(res => res.json())
+            .then(jobs => {
+                // Clear current list logic or merge?
+                // Simplest is to clear and rebuild if we want to be sure
+                const container = document.getElementById('running-jobs');
+                // We won't clear immediately to avoid flash, but we should reconcile
+                // For simplicity, let's just create cards for any that are missing
+                jobs.forEach(job => {
+                    updateRunningJobs({ job_id: job.id, status: 'running' });
+                });
+            });
     });
 
-    socket.on('job_complete', function (data) {
-        // Refresh the page to show updated stats
-        location.reload();
+    socket.on('job_update', function (data) {
+        console.log('Job Update:', data);
+        updateRunningJobs(data);
+        // Refresh recent activity/stats on any update to be safe and unresponsive
+        if (data.status === 'running' || data.status === 'success' || data.status === 'failed') {
+            updateRecentActivity();
+            updateStats();
+        }
     });
 
-    // Auto-refresh every 30 seconds
+    // Fallback polling: sync every 5 seconds in case socket events are missed
     setInterval(() => {
-        location.reload();
-    }, 30000);
+        fetch('/api/jobs/running')
+            .then(res => res.json())
+            .then(jobs => {
+                const container = document.getElementById('running-jobs');
+                const currentCards = container.querySelectorAll('.job-card');
+                const serverJobIds = new Set(jobs.map(j => j.id));
+
+                // Update all running/queued jobs (adds new ones and updates existing)
+                jobs.forEach(job => {
+                    updateRunningJobs({ job_id: job.id, status: job.status });
+                });
+
+                // Remove jobs that are no longer running/queued
+                currentCards.forEach(card => {
+                    const jobId = parseInt(card.dataset.jobId);
+                    if (!serverJobIds.has(jobId)) {
+                        card.remove();
+                        updateRunningCount();
+                    }
+                });
+
+                // Show empty state if needed
+                if (container.children.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="12" y1="8" x2="12" y2="12" />
+                                <line x1="12" y1="16" x2="12.01" y2="16" />
+                            </svg>
+                            <p>No jobs currently running</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(e => console.error('Polling failed:', e));
+
+        // Also refresh recent activity
+        updateRecentActivity();
+    }, 2000);
+
+    function updateRunningJobs(data) {
+        const container = document.getElementById('running-jobs');
+        const existingCard = container.querySelector(`.job-card[data-job-id="${data.job_id}"]`);
+
+        if (data.status === 'running' || data.status === 'queued') {
+            if (!existingCard) {
+                // Fetch job details to create card if it doesn't exist
+                fetch(`/api/jobs/${data.job_id}`)
+                    .then(res => res.json())
+                    .then(job => {
+                        // Check again in case it was added while fetching
+                        if (container.querySelector(`.job-card[data-job-id="${data.job_id}"]`)) return;
+
+                        const emptyState = container.querySelector('.empty-state');
+                        if (emptyState) emptyState.remove();
+
+                        const card = document.createElement('div');
+                        card.className = `job-card ${data.status}`;
+                        card.dataset.jobId = job.id;
+
+                        const statusHtml = data.status === 'running'
+                            ? `<span class="spinner"></span> Running`
+                            : `<span class="status-icon">⏳</span> Queued`;
+
+                        card.innerHTML = `
+                            <div class="job-card-header">
+                                <span class="job-type-badge ${job.job_type}">${job.job_type}</span>
+                                <span class="job-status ${data.status}">
+                                    ${statusHtml}
+                                </span>
+                            </div>
+                            <h4 class="job-name">${job.name}</h4>
+                            <p class="job-description">${job.description || 'No description'}</p>
+                            <div class="job-meta">
+                                <span>Started: ${new Date().toLocaleTimeString('en-GB')}</span>
+                            </div>
+                            <div class="job-actions">
+                                <a href="/jobs/${job.id}" class="btn btn-sm btn-secondary">
+                                    View Logs
+                                </a>
+                            </div>
+                        `;
+                        container.appendChild(card);
+                        updateRunningCount();
+                    });
+            } else {
+                // Update existing card status
+                const statusBadge = existingCard.querySelector('.job-status');
+                existingCard.className = `job-card ${data.status}`;
+                if (statusBadge) {
+                    statusBadge.className = `job-status ${data.status}`;
+                    statusBadge.innerHTML = data.status === 'running'
+                        ? `<span class="spinner"></span> Running`
+                        : `<span class="status-icon">⏳</span> Queued`;
+                }
+            }
+        } else {
+            // If not running (success, failed, queued, idle), remove from running list
+            if (existingCard) {
+                existingCard.remove();
+                if (container.children.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                                <circle cx="12" cy="12" r="10" />
+                                <line x1="12" y1="8" x2="12" y2="12" />
+                                <line x1="12" y1="16" x2="12.01" y2="16" />
+                            </svg>
+                            <p>No jobs currently running</p>
+                        </div>
+                    `;
+                }
+                updateRunningCount();
+            }
+        }
+    }
+
+    function updateRunningCount() {
+        const count = document.querySelectorAll('#running-jobs .job-card').length;
+        const badge = document.querySelector('.section-header .badge');
+        if (badge) badge.textContent = count;
+    }
+
+    async function updateRecentActivity() {
+        try {
+            const res = await fetch('/api/logs/recent?limit=10');
+            if (res.ok) {
+                const logs = await res.json();
+                const container = document.querySelector('.activity-list');
+                if (logs.length === 0) {
+                    container.innerHTML = '<div class="empty-state small"><p>No recent activity</p></div>';
+                    return;
+                }
+
+                container.innerHTML = logs.map(log => {
+                    let icon = '';
+                    if (log.status === 'success') {
+                        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12" /></svg>';
+                    } else if (log.status === 'failed') {
+                        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>';
+                    } else if (log.status === 'running') {
+                        icon = '<span class="spinner small"></span>';
+                    } else {
+                        icon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" /></svg>';
+                    }
+
+                    return `
+                        <div class="activity-item">
+                            <div class="activity-status ${log.status}">
+                                ${icon}
+                            </div>
+                            <div class="activity-content">
+                                <span class="activity-job">${log.job_name}</span>
+                                <span class="activity-time">${log.started_at.replace('T', ' ')}</span>
+                            </div>
+                            <div class="activity-meta">
+                                <span class="activity-trigger ${log.trigger_type}">${log.trigger_type}</span>
+                                ${log.exit_code !== null ? `<span class="activity-exit-code ${log.exit_code === 0 ? 'success' : 'error'}">Exit: ${log.exit_code}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        } catch (e) {
+            console.error('Failed to update recent activity:', e);
+        }
+    }
+
+    async function updateStats() {
+        // We could create a specific API for stats, or just reload page if crucial. 
+        // For now, let's assume stats (top cards) are less critical to be instant-update than lists.
+        // But for "Running Jobs" count, we updated it manually.
+        // We can create a simple stats endpoint or just leave it for page load.
+    }
 </script>
 {% endblock %}

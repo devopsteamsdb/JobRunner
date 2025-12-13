@@ -53,14 +53,14 @@ def create_credential():
 @credentials_bp.route('/<int:cred_id>', methods=['GET'])
 def get_credential(cred_id):
     """Get a specific credential."""
-    credential = Credential.query.get_or_404(cred_id)
+    credential = db.get_or_404(Credential, cred_id)
     return jsonify(credential.to_dict(include_sensitive=False))
 
 
 @credentials_bp.route('/<int:cred_id>', methods=['PUT'])
 def update_credential(cred_id):
     """Update a credential."""
-    credential = Credential.query.get_or_404(cred_id)
+    credential = db.get_or_404(Credential, cred_id)
     data = request.get_json()
     
     if not data:
@@ -96,7 +96,7 @@ def update_credential(cred_id):
 @credentials_bp.route('/<int:cred_id>', methods=['DELETE'])
 def delete_credential(cred_id):
     """Delete a credential."""
-    credential = Credential.query.get_or_404(cred_id)
+    credential = db.get_or_404(Credential, cred_id)
     
     # Check if any jobs are using this credential
     if credential.jobs:

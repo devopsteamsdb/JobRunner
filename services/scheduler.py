@@ -44,7 +44,7 @@ class SchedulerService:
         
         self._initialized = True
     
-    def init_app(self, app, socketio):
+    def init_app(self, app, socketio, cleanup=True):
         """Initialize with Flask app and SocketIO instance."""
         self.app = app
         self.socketio = socketio
@@ -55,7 +55,8 @@ class SchedulerService:
         
         # Load existing jobs from database
         with app.app_context():
-            self._cleanup_stale_jobs()
+            if cleanup:
+                self._cleanup_stale_jobs()
             self._load_jobs_from_db()
     
     def _cleanup_stale_jobs(self):
@@ -115,7 +116,7 @@ class SchedulerService:
         
         # Update next run time
         with self.app.app_context():
-            job_record = Job.query.get(job.id)
+            job_record = db.session.get(Job, job.id)
             if job_record:
                 next_run = self.scheduler.get_job(job_id)
                 if next_run and next_run.next_run_time:
@@ -155,10 +156,38 @@ class SchedulerService:
         
         return None
     
+    def _emit_log(self, job_id: int, log_id: int, message: str):
+        """Emit log message via SocketIO."""
+        if self.socketio:
+            self.socketio.emit('job_log', {
+                'job_id': job_id,
+                'log_id': log_id,
+                'message': message,
+                'timestamp': datetime.utcnow().isoformat()
+            }, namespace='/jobs', room=f'job_{job_id}')
+            self.socketio.sleep(0)  # Force yield to allow flush
+    
+    def _emit_job_update(self, job_id: int, status: str, last_run: datetime = None, next_run: datetime = None):
+        """Emit job status update event."""
+        if self.socketio:
+            data = {
+                'job_id': job_id,
+                'status': status,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            if last_run:
+                data['last_run'] = last_run.isoformat()
+            if next_run:
+                data['next_run'] = next_run.isoformat()
+                
+            self.socketio.emit('job_update', data, namespace='/jobs')
+            self.socketio.sleep(0)  # Force yield to allow flush
+            print(f"[DEBUG] Emitted job_update for job {job_id}: {status}")
+
     def _submit_job(self, job_id: int, trigger_type: str) -> Optional[int]:
         """Submit a job for execution. Returns log_id."""
         with self.app.app_context():
-            job = Job.query.get(job_id)
+            job = db.session.get(Job, job_id)
             if not job:
                 return None
             
@@ -167,14 +196,14 @@ class SchedulerService:
                 job_id=job_id,
                 started_at=datetime.utcnow(),
                 trigger_type=trigger_type,
-                status='queued'  # New status indicating it's waiting
+                status='queued'
             )
             db.session.add(job_log)
-            # Update job status to show it's queued only if not currently running
-            # Check safely with lock if needed, but here we just check if it's considered running in memory
+            
             is_running = job_id in self._running_jobs
             if not is_running:
                 job.status = 'queued'
+                self._emit_job_update(job_id, 'queued')
             
             db.session.commit()
             log_id = job_log.id
@@ -192,7 +221,7 @@ class SchedulerService:
         self._process_queue(job_id)
         
         return log_id
-        
+    
     def _process_queue(self, job_id: int):
         """Process the next job in queue if idle."""
         with self._queue_lock:
@@ -211,9 +240,6 @@ class SchedulerService:
             self._running_jobs.add(job_id)
             
         # Spawn worker thread
-        # Using eventlet.spawn if available, otherwise threading
-        # Since we patched app.py, threading.Thread should work with eventlet too,
-        # but eventlet.spawn is lighter. However, to keep it simple and consistent with existing code:
         thread = threading.Thread(
             target=self._run_job_worker,
             args=[job_id, log_id]
@@ -227,13 +253,12 @@ class SchedulerService:
     def run_job_now(self, job_id: int) -> Optional[int]:
         """Manually trigger a job execution. Returns log_id."""
         return self._submit_job(job_id, 'manual')
-    
     def _run_job_worker(self, job_id: int, log_id: int):
         """Worker executing the job."""
         try:
             with self.app.app_context():
-                job = Job.query.get(job_id)
-                job_log = JobLog.query.get(log_id)
+                job = db.session.get(Job, job_id)
+                job_log = db.session.get(JobLog, log_id)
                 
                 if not job or not job_log:
                     return
@@ -243,6 +268,8 @@ class SchedulerService:
                 job_log.status = 'running'
                 job.last_run = datetime.utcnow()
                 db.session.commit()
+                
+                self._emit_job_update(job_id, 'running', last_run=job.last_run)
                 
                 # Emit start event
                 self._emit_log(job_id, log_id, f"[START] Job '{job.name}' started at {datetime.utcnow().isoformat()}")
@@ -304,26 +331,14 @@ class SchedulerService:
         
         db.session.commit()
         
+        self._emit_job_update(job.id, job.status, next_run=job.next_run)
+        
         # Emit completion event
         self._emit_log(
             job.id, job_log.id,
             f"[END] Job finished with status: {'SUCCESS' if success else 'FAILED'} (exit code: {exit_code})"
         )
         self._emit_job_complete(job.id, job_log.id, success)
-    
-    def _emit_log(self, job_id: int, log_id: int, message: str):
-        """Emit log message via SocketIO."""
-        print(f"[DEBUG] _emit_log called for job {job_id}: {message[:50]}...")
-        if self.socketio:
-            print(f"[DEBUG] Emitting to namespace /jobs, room job_{job_id}")
-            self.socketio.emit('job_log', {
-                'job_id': job_id,
-                'log_id': log_id,
-                'message': message,
-                'timestamp': datetime.utcnow().isoformat()
-            }, namespace='/jobs', room=f'job_{job_id}')
-        else:
-            print("[ERROR] self.socketio is None!")
     
     def _emit_job_complete(self, job_id: int, log_id: int, success: bool):
         """Emit job completion event."""

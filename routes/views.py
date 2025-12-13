@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template
-from models import Job, Credential, JobLog
+from models import db, Job, Credential, JobLog
 
 views_bp = Blueprint('views', __name__)
 
@@ -41,7 +41,7 @@ def job_form_new():
 
 @views_bp.route('/jobs/<int:job_id>')
 def job_detail(job_id):
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     # Fetch recent logs (last 10)
     # Note: job.logs is a dynamic relationship (query object)
     logs = job.logs.order_by(JobLog.started_at.desc()).limit(10).all()

@@ -63,7 +63,8 @@
         <tbody>
             {% if jobs %}
             {% for job in jobs %}
-            <tr class="job-row" data-type="{{ job.job_type }}" data-status="{{ job.status }}">
+            <tr class="job-row" data-job-id="{{ job.id }}" data-type="{{ job.job_type }}"
+                data-status="{{ job.status }}">
                 <td>
                     <div class="job-name-cell">
                         <a href="{{ url_for('views.job_detail', job_id=job.id) }}">{{ job.name }}</a>
@@ -173,13 +174,115 @@
 
 {% block extra_scripts %}
 <script>
+    const socket = io('/jobs');
+
+    socket.on('connect', () => {
+        console.log('Connected to real-time updates');
+        // On reconnect, we might have missed events. 
+        // Reloading the page is the safest way to sync state for the list, 
+        // but to avoid disruption, we could just fetch the list.
+        // For now, let's just log it. If user complains again, we can auto-reload.
+        // Actually, let's just re-fetch the table content? 
+        // It's server-side rendered. A simple location.reload() might be too aggressive if they are editing?
+        // Let's rely on the user refreshing if they see it stuck, but the reconnection should help subsequent updates.
+        // OPTIONAL: Add a "Connected" toast
+        // showToast('Connected to scheduler', 'success');
+    });
+
+    socket.on('job_update', (data) => {
+        console.log('Update received:', data);
+        // Debug toast
+        // showToast(`Update: Job ${data.job_id} -> ${data.status}`, 'info');
+
+        try {
+            const row = document.querySelector(`.job-row[data-job-id="${data.job_id}"]`);
+            if (row) {
+                // Update status badge
+                const statusCell = row.querySelector('.status-badge');
+                if (statusCell) {
+                    // Update class
+                    statusCell.className = `status-badge ${data.status}`;
+                    statusCell.dataset.status = data.status; // Update attribute for filter
+
+                    // Update content
+                    if (data.status === 'running') {
+                        statusCell.innerHTML = '<span class="spinner small"></span> running';
+                    } else {
+                        statusCell.textContent = data.status;
+                    }
+                }
+
+                // Update row attributes for filtering
+                row.dataset.status = data.status;
+
+                // Update Last Run if provided
+                if (data.last_run) {
+                    const lastRunCell = row.children[4];
+                    if (lastRunCell) {
+                        lastRunCell.textContent = data.last_run.substring(0, 16).replace('T', ' ');
+                    }
+                }
+
+                // Update Next Run if provided
+                if (data.next_run) {
+                    const nextRunCell = row.children[5];
+                    if (nextRunCell) {
+                        nextRunCell.textContent = data.next_run.substring(0, 16).replace('T', ' ');
+                    }
+                }
+            } else {
+                console.warn(`Row for job ${data.job_id} not found`);
+            }
+        } catch (e) {
+            console.error('Error updating job row:', e);
+        }
+    });
+
+    // Fallback polling: sync job statuses every 5 seconds in case socket events are missed
+    setInterval(async () => {
+        try {
+            const res = await fetch('/api/jobs');
+            if (res.ok) {
+                const jobs = await res.json();
+                jobs.forEach(job => {
+                    const row = document.querySelector(`.job-row[data-job-id="${job.id}"]`);
+                    if (row) {
+                        const statusCell = row.querySelector('.status-badge');
+                        if (statusCell) {
+                            // Always update status to ensure sync
+                            statusCell.className = `status-badge ${job.status}`;
+                            statusCell.dataset.status = job.status;
+                            if (job.status === 'running') {
+                                statusCell.innerHTML = '<span class="spinner small"></span> running';
+                            } else {
+                                statusCell.textContent = job.status;
+                            }
+                            row.dataset.status = job.status;
+                        }
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Polling failed:', e);
+        }
+    }, 2000);
+
     function applyFilters() {
         const typeFilter = document.getElementById('filter-type').value;
         const statusFilter = document.getElementById('filter-status').value;
 
         document.querySelectorAll('.job-row').forEach(row => {
             const type = row.dataset.type;
-            const status = row.dataset.status;
+            // We need to keep data-status updated for filtering
+            const statusBadge = row.querySelector('.status-badge');
+            let status = 'idle';
+            if (statusBadge) {
+                // Extract class list to determine status
+                if (statusBadge.classList.contains('running')) status = 'running';
+                else if (statusBadge.classList.contains('success')) status = 'success';
+                else if (statusBadge.classList.contains('failed')) status = 'failed';
+                else if (statusBadge.classList.contains('queued')) status = 'queued';
+            }
 
             let show = true;
             if (typeFilter && type !== typeFilter) show = false;
@@ -196,7 +299,7 @@
 
             if (response.ok) {
                 showToast('Job triggered successfully', 'success');
-                setTimeout(() => location.reload(), 1000);
+                // No need to reload! SocketIO will handle status update to 'queued' -> 'running'
             } else {
                 showToast(data.error || 'Failed to run job', 'error');
             }
@@ -212,7 +315,7 @@
 
             if (response.ok) {
                 showToast(data.message, 'success');
-                setTimeout(() => location.reload(), 500);
+                setTimeout(() => location.reload(), 500); // Toggle still needs reload to update icon state unless we handle it
             } else {
                 showToast(data.error || 'Failed to toggle job', 'error');
             }
@@ -230,7 +333,7 @@
 
             if (response.ok) {
                 showToast('Job duplicated successfully', 'success');
-                setTimeout(() => location.reload(), 500);
+                setTimeout(() => location.reload(), 500); // New row needs reload
             } else {
                 showToast(data.error || 'Failed to duplicate job', 'error');
             }
@@ -250,7 +353,9 @@
 
             if (response.ok) {
                 showToast('Job deleted successfully', 'success');
-                setTimeout(() => location.reload(), 500);
+                // Remove row directly
+                const row = document.querySelector(`.job-row[data-job-id="${jobId}"]`);
+                if (row) row.remove();
             } else {
                 showToast(data.error || 'Failed to delete job', 'error');
             }

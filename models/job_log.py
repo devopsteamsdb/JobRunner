@@ -37,6 +37,7 @@ class JobLog(db.Model):
             'error_output': self.error_output,
             'trigger_type': self.trigger_type,
             'duration': self._calculate_duration(),
+            'job_name': self.job.name if self.job else 'Unknown',
         }
     
     def _calculate_duration(self):

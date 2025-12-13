@@ -92,26 +92,53 @@
     const socket = io('/jobs');
 
     socket.on('connect', () => {
+        console.log('Connected to job detail updates');
         document.getElementById('connection-status').textContent = 'Connected';
         socket.emit('subscribe', { job_id: jobId });
     });
 
+    // Use job_update for clean status updates
+    socket.on('job_update', (data) => {
+        if (data.job_id === jobId) {
+            console.log('Status update:', data.status);
+
+            // Update Header Status Badge
+            const statusBadge = document.querySelector('.header-subtitle .status-badge');
+            if (statusBadge) {
+                statusBadge.className = `status-badge ${data.status}`;
+                statusBadge.textContent = data.status;
+            }
+
+            // Update Last Run/Next Run in Info Panel
+            if (data.last_run) {
+                const infoItems = document.querySelectorAll('.info-panel .info-item p');
+                // Assuming order: Description, Schedule, Last Run, Next Run
+                // Last Run is index 2
+                if (infoItems[2]) infoItems[2].textContent = data.last_run.replace('T', ' ');
+            }
+            if (data.next_run) {
+                const infoItems = document.querySelectorAll('.info-panel .info-item p');
+                // Next Run is index 3
+                if (infoItems[3]) infoItems[3].textContent = data.next_run.replace('T', ' ');
+            }
+
+            // Refresh history table when status changes to running or success/failed
+            // We can debounce this or just call it, network traffic is low
+            updateJobHistory();
+        }
+    });
+
     socket.on('job_log', (data) => {
         if (data.job_id === jobId) {
-            const console = document.getElementById('console-output');
-            const ph = console.querySelector('.console-placeholder');
+            const consoleOutput = document.getElementById('console-output');
+            const ph = consoleOutput.querySelector('.console-placeholder');
             if (ph) ph.remove();
+
             const line = document.createElement('div');
             line.className = 'console-line';
             line.textContent = data.message;
-            console.appendChild(line);
-            console.scrollTop = console.scrollHeight;
-
-            // Refresh history/status on state changes
-            if (data.message.startsWith('[QUEUED]') || data.message.startsWith('[START]')) {
-                updateJobStatus();
-                updateJobHistory();
-            }
+            consoleOutput.appendChild(line);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
         }
     });
 
@@ -128,36 +155,10 @@
             consoleOutput.appendChild(separator);
             consoleOutput.scrollTop = consoleOutput.scrollHeight;
 
-            setTimeout(() => {
-                updateJobStatus();
-                updateJobHistory();
-            }, 1000); // Keep delay for completion to ensure DB commit
+            // Final refresh of history to get exit codes
+            setTimeout(updateJobHistory, 500);
         }
     });
-
-    async function updateJobStatus() {
-        try {
-            const res = await fetch(`/api/jobs/${jobId}`);
-            if (res.ok) {
-                const job = await res.json();
-
-                // Update header status
-                const statusBadge = document.querySelector('.header-subtitle .status-badge');
-                if (statusBadge) {
-                    statusBadge.className = `status-badge ${job.status}`;
-                    statusBadge.textContent = job.status;
-                }
-
-                // Update info panel
-                const infoItems = document.querySelectorAll('.info-panel .info-item p');
-                // Assuming order: Description, Schedule, Last Run, Next Run
-                if (infoItems[2]) infoItems[2].textContent = job.last_run || 'Never';
-                if (infoItems[3]) infoItems[3].textContent = job.next_run || 'N/A';
-            }
-        } catch (e) {
-            console.error('Failed to update status:', e);
-        }
-    }
 
     async function updateJobHistory() {
         try {
@@ -168,7 +169,7 @@
                 if (tbody && data.logs.length > 0) {
                     tbody.innerHTML = data.logs.map(log => `
                         <tr>
-                            <td>${log.started_at}</td>
+                            <td>${log.started_at.replace('T', ' ')}</td>
                             <td><span class="status-badge ${log.status}">${log.status}</span></td>
                             <td>${log.exit_code != null ? log.exit_code : '-'}</td>
                             <td><button class="btn btn-sm" onclick="viewLog(${log.id})">View</button></td>
@@ -185,16 +186,30 @@
         const res = await fetch(`/api/jobs/${id}/run`, { method: 'POST' });
         if (res.ok) {
             showToast('Job triggered', 'success');
-            // Immediate refresh to show queued status
-            updateJobHistory();
-            updateJobStatus();
+            // Status update will handle the rest via socket
+        } else {
+            const data = await res.json();
+            showToast(data.error || 'Failed', 'error');
         }
     }
 
     async function viewLog(logId) {
         const res = await fetch(`/api/logs/${logId}`);
         const data = await res.json();
-        document.getElementById('log-output').textContent = data.output || 'No output';
+        const logContent = document.getElementById('log-output');
+        logContent.textContent = data.output || 'No output';
+
+        // Append error output if exists
+        if (data.error_output) {
+            const errDiv = document.createElement('div');
+            errDiv.style.color = 'var(--status-failed)';
+            errDiv.style.marginTop = '1em';
+            errDiv.style.borderTop = '1px solid #333';
+            errDiv.style.paddingTop = '1em';
+            errDiv.textContent = 'ERROR OUTPUT:\n' + data.error_output;
+            logContent.appendChild(errDiv);
+        }
+
         document.getElementById('log-modal').classList.add('active');
     }
 

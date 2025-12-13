@@ -9,7 +9,8 @@ services:
       - ./scripts:/app/scripts
     environment:
       - FLASK_APP=app.py
-      - FLASK_DEBUG=1
+      # FLASK_DEBUG=1
       # Force Ansible settings at runtime (overrides image settings)
+      - TEST_IN_PRODUCTION=1
       - ANSIBLE_DEPRECATION_WARNINGS=False
       - ANSIBLE_CONFIG=/etc/ansible/ansible.cfg

@@ -77,21 +77,6 @@ def create_job():
     if job.enabled:
         scheduler_service.add_job(job)
     
-    # Create job directory in scripts/
-    try:
-        # Re-import to ensure context if needed, though top-level is fine
-        base_dir = os.path.join(current_app.root_path, 'scripts')
-        job_dir_name = f"{job.id}_{secure_filename(job.name)}"
-        job_dir_path = os.path.join(base_dir, job_dir_name)
-        
-        if not os.path.exists(job_dir_path):
-            os.makedirs(job_dir_path)
-            # Create a .gitkeep or empty file to ensure folder isn't empty (optional but good for git)
-            with open(os.path.join(job_dir_path, '.gitkeep'), 'w') as f:
-                pass
-            print(f"Created job directory: {job_dir_path}")
-    except Exception as e:
-        print(f"Error creating job directory: {e}")
     
     return jsonify(job.to_dict()), 201
 
@@ -99,14 +84,14 @@ def create_job():
 @jobs_bp.route('/<int:job_id>', methods=['GET'])
 def get_job(job_id):
     """Get a specific job by ID."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     return jsonify(job.to_dict())
 
 
 @jobs_bp.route('/<int:job_id>', methods=['PUT'])
 def update_job(job_id):
     """Update an existing job."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     data = request.get_json()
     
     if not data:
@@ -174,7 +159,7 @@ def update_job(job_id):
 @jobs_bp.route('/<int:job_id>/duplicate', methods=['POST'])
 def duplicate_job(job_id):
     """Duplicate an existing job."""
-    original_job = Job.query.get_or_404(job_id)
+    original_job = db.get_or_404(Job, job_id)
     
     # Create new job with copied fields
     new_job = Job(
@@ -206,19 +191,6 @@ def duplicate_job(job_id):
     db.session.add(new_job)
     db.session.commit()
     
-    # Create job directory if needed
-    try:
-        base_dir = os.path.join(current_app.root_path, 'scripts')
-        job_dir_name = f"{new_job.id}_{secure_filename(new_job.name)}"
-        job_dir_path = os.path.join(base_dir, job_dir_name)
-        
-        if not os.path.exists(job_dir_path):
-            os.makedirs(job_dir_path)
-            with open(os.path.join(job_dir_path, '.gitkeep'), 'w') as f:
-                pass
-            print(f"Created job directory: {job_dir_path}")
-    except Exception as e:
-        print(f"Error creating duplicate job directory: {e}")
             
     return jsonify(new_job.to_dict()), 201
 
@@ -226,7 +198,7 @@ def duplicate_job(job_id):
 @jobs_bp.route('/<int:job_id>', methods=['DELETE'])
 def delete_job(job_id):
     """Delete a job."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     
     # Remove from scheduler
     scheduler_service.remove_job(job.id)
@@ -241,7 +213,7 @@ def delete_job(job_id):
 @jobs_bp.route('/<int:job_id>/run', methods=['POST'])
 def run_job(job_id):
     """Manually trigger a job execution."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     
     log_id = scheduler_service.run_job_now(job.id)
     
@@ -257,7 +229,7 @@ def run_job(job_id):
 @jobs_bp.route('/<int:job_id>/toggle', methods=['POST'])
 def toggle_job(job_id):
     """Enable or disable a job."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     
     job.enabled = not job.enabled
     db.session.commit()
@@ -275,6 +247,6 @@ def toggle_job(job_id):
 
 @jobs_bp.route('/running', methods=['GET'])
 def get_running_jobs():
-    """Get all currently running jobs."""
-    jobs = Job.query.filter_by(status='running').all()
+    """Get all currently running or queued jobs."""
+    jobs = Job.query.filter(Job.status.in_(['running', 'queued'])).all()
     return jsonify([job.to_dict() for job in jobs])

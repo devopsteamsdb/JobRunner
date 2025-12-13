@@ -8,7 +8,7 @@ logs_bp = Blueprint('logs', __name__, url_prefix='/api')
 @logs_bp.route('/jobs/<int:job_id>/logs', methods=['GET'])
 def get_job_logs(job_id):
     """Get execution history for a specific job."""
-    job = Job.query.get_or_404(job_id)
+    job = db.get_or_404(Job, job_id)
     
     # Pagination
     page = request.args.get('page', 1, type=int)
@@ -29,14 +29,14 @@ def get_job_logs(job_id):
 @logs_bp.route('/logs/<int:log_id>', methods=['GET'])
 def get_log(log_id):
     """Get a specific log entry."""
-    log = JobLog.query.get_or_404(log_id)
+    log = db.get_or_404(JobLog, log_id)
     return jsonify(log.to_dict())
 
 
 @logs_bp.route('/logs/<int:log_id>', methods=['DELETE'])
 def delete_log(log_id):
     """Delete a specific log entry."""
-    log = JobLog.query.get_or_404(log_id)
+    log = db.get_or_404(JobLog, log_id)
     db.session.delete(log)
     db.session.commit()
     return jsonify({'message': 'Log deleted successfully'})
