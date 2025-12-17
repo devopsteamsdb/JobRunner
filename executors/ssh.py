@@ -132,12 +132,14 @@ class SSHExecutor(BaseExecutor):
         key_file = io.StringIO(key_data)
         passphrase_bytes = passphrase.encode() if passphrase else None
         
-        key_types = [
-            paramiko.RSAKey,
-            paramiko.DSSKey,
-            paramiko.ECDSAKey,
-            paramiko.Ed25519Key,
-        ]
+        # Build list of available key types (DSSKey removed in paramiko 3.x)
+        key_types = [paramiko.RSAKey]
+        if hasattr(paramiko, 'DSSKey'):
+            key_types.append(paramiko.DSSKey)
+        if hasattr(paramiko, 'ECDSAKey'):
+            key_types.append(paramiko.ECDSAKey)
+        if hasattr(paramiko, 'Ed25519Key'):
+            key_types.append(paramiko.Ed25519Key)
         
         for key_type in key_types:
             try:
