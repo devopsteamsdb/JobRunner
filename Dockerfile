@@ -1,5 +1,5 @@
 # explicitly use Debian 12 (Bookworm) to ensure package availability
-FROM python:3.11-slim-bookworm
+FROM python:3-slim-bookworm
 
 # Prevent Python from writing pyc files and buffering stdout
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -22,10 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 2: Install PowerShell (Manual Binary Install)
-# We use the LTS version 7.4.6 which is stable and compatible with these libraries.
-# This avoids "apt-get install powershell" repository errors.
-RUN wget -q -O powershell.tar.gz https://github.com/PowerShell/PowerShell/releases/download/v7.4.6/powershell-7.4.6-linux-x64.tar.gz \
+# Step 2: Install PowerShell (Manual Binary Install - Latest)
+# We dynamically fetch the URL for the latest stable linux-x64 release from the GitHub API.
+RUN PS_URL=$(wget -qO- https://api.github.com/repos/PowerShell/PowerShell/releases/latest | grep -o 'https://[^"]*linux-x64.tar.gz' | head -n 1) \
+    && wget -q -O powershell.tar.gz "$PS_URL" \
     && mkdir -p /opt/microsoft/powershell/7 \
     && tar zxf powershell.tar.gz -C /opt/microsoft/powershell/7 \
     && chmod +x /opt/microsoft/powershell/7/pwsh \
